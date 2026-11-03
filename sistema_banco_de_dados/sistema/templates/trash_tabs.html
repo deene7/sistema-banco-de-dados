@@ -1,0 +1,4 @@
+<nav class="trash-tabs" aria-label="Tipos de itens na lixeira">
+  <a class="{{ 'selected' if request.endpoint == 'index' else '' }}" href="{{ url_for('index',lixeira=1) }}">Clientes</a>
+  <a class="{{ 'selected' if request.endpoint != 'index' else '' }}" href="{{ url_for('features.trash_imports') }}">Lotes importados</a>
+</nav>

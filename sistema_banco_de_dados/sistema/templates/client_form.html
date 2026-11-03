@@ -1,0 +1,14 @@
+{% extends 'base.html' %}{% block content %}
+<a class="back" href="{{ url_for('detail', client_id=client.id) if client else url_for('index') }}">← Voltar</a>
+<header class="page-heading"><div><div class="eyebrow">CADASTRO</div><h1>{{ 'Novo cliente' if creating else 'Editar cliente' }}</h1><p>{{ 'Confira o CPF para evitar um cadastro duplicado.' if creating else 'As alterações ficam registradas no histórico.' }}</p></div></header>
+<form method="post" class="panel form-panel"><input type="hidden" name="csrf" value="{{ csrf }}">{% if not creating %}<input type="hidden" name="versao" value="{{ client.app_versao }}">{% endif %}
+<div class="form-grid">
+{% if creating and features_v2 %}<label>Categoria<select name="categoria_id"><option value="">Sem categoria</option>{% for cat in available_categories %}<option value="{{ cat.id }}">{{ cat.nome }}</option>{% endfor %}</select></label>{% endif %}
+<label>CPF *<input name="cpf" value="{{ client.cpf or '' }}" required maxlength="14" inputmode="numeric" data-mask="cpf" placeholder="000.000.000-00"><small>Até 11 números. A pontuação é aplicada automaticamente.</small></label>
+<label>Nome completo *<input name="nome" value="{{ client.nome or '' }}" required maxlength="255" autocomplete="off"></label>
+<label>Data de nascimento<input type="date" name="data_nascimento" value="{{ client.data_nascimento or '' }}"></label>
+<label>Nome da mãe<input name="nome_mae" value="{{ client.nome_mae or '' }}" maxlength="255"></label>
+<label>Sexo (código da origem)<select name="sexo_origem"><option value="">Não informado</option>{% for v in ['M','F','I'] %}<option value="{{ v }}" {% if client.sexo_origem == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select><small>Os códigos importados são preservados como recebidos.</small></label>
+{% if creating %}<label>E-mail inicial<input name="email" type="email" maxlength="320" placeholder="nome@exemplo.com"><small>Opcional. CPF existente: ADM/TI podem completar campos vazios; Atendimento só acrescenta telefone.</small></label><label>Telefone inicial<input name="telefone" maxlength="15" inputmode="tel" data-mask="phone" placeholder="(00) 00000-0000"><small>Opcional. Até 11 números com DDD. Você também pode colar com +55.</small></label>{% endif %}
+</div><div class="form-actions"><a class="button" href="{{ url_for('index') }}">Cancelar</a><button class="primary">{{ 'Cadastrar cliente' if creating else 'Salvar alterações' }}</button></div></form>
+{% endblock %}

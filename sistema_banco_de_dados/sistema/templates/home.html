@@ -1,0 +1,22 @@
+{% extends 'base.html' %}{% from 'icons.html' import nav_icon %}{% block title %}Início{% endblock %}{% block content %}
+<div class="home-page">
+<header class="page-heading home-heading"><div><div class="eyebrow">Visão geral</div><h1>Olá, {{ (user.nome or '').split()|first|default('equipe',true) }}</h1><p>Boas-vindas! Sua base organizada, em um só lugar.</p></div><span class="home-date">{{ today }}</span></header>
+<section class="panel home-search"><div><h2>Encontre quem você precisa</h2><p>Busque pelo CPF, telefone ou início do nome.</p></div><form action="{{ url_for('index') }}" method="get"><label class="sr-only" for="home-query">Buscar cliente</label><input id="home-query" name="q" maxlength="255" placeholder="Digite um CPF, telefone ou nome" autocomplete="off"><button class="primary">Consultar cliente</button></form></section>
+<div class="home-section-label"><h2>Retrato da base</h2><span>Resumo atualizado em segundo plano</span></div>
+<div class="home-metrics">
+{% for label,key,filter in [('Clientes ativos','total',{}),('Sem nome informado','sem_nome',{'nome':'sem'}),('Sem telefone','sem_telefone',{'telefone':'sem'}),('Sem e-mail','sem_email',{'email':'sem'})] %}
+<a class="panel home-metric" href="{{ url_for('index',**filter) }}"><span class="home-metric-label">{{ label }}</span><strong>{{ '{:,}'.format(stats[key]).replace(',','.') }}</strong><span class="home-metric-foot">{{ 'Consultar base' if key == 'total' else 'Ver clientes' }} <span aria-hidden="true">→</span></span></a>{% endfor %}
+</div>
+<div class="home-section-label"><h2>Acesso rápido</h2></div>
+<div class="home-shortcuts">
+{% set shortcuts=[('clients','Consultar clientes','Pesquise e filtre sua base.',url_for('index')),('user-plus','Novo cliente','Reúna os dados de um cadastro.',url_for('new_client'))] %}
+{% if editor and features_v2 %}{% set shortcuts=shortcuts+[('upload','Importar arquivo','Receba uma base CSV ou Excel.',url_for('features.imports')),('tags','Categorias','Organize os públicos da sua base.',url_for('features.categories'))] %}{% endif %}
+{% for icon,title,description,href in shortcuts %}<a class="panel home-shortcut" href="{{ href }}"><span class="home-shortcut-icon" aria-hidden="true">{{ nav_icon(icon) }}</span><div><strong>{{ title }}</strong><small>{{ description }}</small></div><span class="home-shortcut-arrow" aria-hidden="true">↗</span></a>{% endfor %}
+</div>
+{% if editor %}<div class="home-recent-grid">
+<section class="panel home-recent"><div class="panel-heading"><h2>Importações recentes</h2>{% if features_v2 %}<a class="text-link" href="{{ url_for('features.imports') }}">Ver todas →</a>{% endif %}</div>
+{% for job in jobs %}<a class="home-import-row" href="{{ url_for('features.batch_clients',job_id=job.id) }}"><span class="home-file-icon" aria-hidden="true">{{ nav_icon('upload') }}</span><div><strong>{{ job.arquivo }}</strong><small>Lote #{{ job.id }} · {{ job.criado_em|moment }}{% if job.pendencias %} · {{ job.pendencias }} pendência(s){% endif %}</small></div><span class="tag {{ 'status-success' if job.estado == 'concluida' else '' }}">{{ job.estado|import_status }}</span></a>{% else %}<div class="home-empty"><strong>Nenhuma importação por aqui</strong><p>Seus próximos arquivos aparecerão nesta lista.</p></div>{% endfor %}</section>
+<section class="panel home-recent"><div class="panel-heading"><h2>Atividades recentes</h2><a class="text-link" href="{{ url_for('system_logs') }}">Ver histórico →</a></div>
+<div class="home-activity-list">{% for item in activities %}<a class="home-activity" href="{{ url_for('history',audit_id=item.id) }}"><span class="home-activity-dot" aria-hidden="true"></span><div><strong>{{ item.acao.replace('_',' ')|capitalize }}</strong><p>{{ item.autor or 'Equipe' }} · {{ item.entidade }}</p><small>{{ item.criado_em|moment }}</small></div></a>{% else %}<div class="home-empty"><strong>Tudo pronto para começar</strong><p>As atividades da equipe aparecerão aqui.</p></div>{% endfor %}</div></section>
+</div>{% endif %}
+</div>{% endblock %}

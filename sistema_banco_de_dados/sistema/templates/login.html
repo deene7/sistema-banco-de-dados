@@ -1,0 +1,12 @@
+{% extends 'base.html' %}{% block title %}Entrar{% endblock %}
+{% block content %}
+<section class="login-layout">
+<div class="login-intro"><img class="login-logo" src="{{ url_for('static', filename='wa-logo-clean.png') }}" alt="WA"><div class="eyebrow">BASE DE CLIENTES</div><h1>Informações reunidas.<br>Atendimento mais simples.</h1><p>Consulte os clientes e mantenha os contatos organizados em um só lugar.</p><div class="intro-line"></div><small>Acesso exclusivo da equipe.</small></div>
+<div class="login-card"><div class="eyebrow">BEM-VINDO</div><h2>Entre na sua conta</h2><p>Use seu login individual para continuar.</p>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Login<input name="login" required maxlength="80" autocomplete="username" autofocus></label>
+<label>Senha<input type="password" name="senha" required maxlength="200" autocomplete="current-password"></label>
+<button class="primary full">Entrar no sistema <span>→</span></button></form>
+<small class="muted">Precisa de acesso? Fale com a administração.</small></div>
+</section>
+{% endblock %}

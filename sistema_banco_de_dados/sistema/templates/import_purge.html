@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block title %}Excluir lote permanentemente{% endblock %}{% block content %}
+<a class="back" href="{{ url_for('features.trash_imports') }}">← Voltar para a lixeira</a>
+<header class="page-heading"><div><div class="eyebrow">LOTE #{{ job.id }}</div><h1>Excluir importação permanentemente</h1><p>{{ job.arquivo }}</p></div></header>
+<form class="panel form-panel" method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="notice error">Esta ação não pode ser desfeita. Remove o lote e seus registros de origem do sistema. Os clientes novos movidos para a lixeira junto com o lote e seus contatos também serão apagados. Clientes anteriores, alterados ou usados por outro lote ativo serão preservados. Histórico, backups e o arquivo original preservado na pasta privada não são apagados.</div>
+<label>Número do lote para confirmar<input name="confirmacao" required inputmode="numeric" autocomplete="off" placeholder="{{ job.id }}"></label>
+<label>Sua senha do sistema<input type="password" name="senha" required autocomplete="current-password"></label>
+<label>Motivo{{ ' (opcional)' if user.perfil == 'ADM' else '' }}<input name="motivo" {% if user.perfil != 'ADM' %}required{% endif %} maxlength="500"></label>
+<div class="form-actions"><a class="button" href="{{ url_for('features.trash_imports') }}">Cancelar</a><button class="danger-button">Excluir permanentemente</button></div></form>{% endblock %}

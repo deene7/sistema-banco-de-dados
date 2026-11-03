@@ -1,0 +1,36 @@
+{% from 'icons.html' import nav_icon %}
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static',filename='wa-favicon.svg',v='2') }}">
+<title>{% block title %}Clientes{% endblock %} · WA</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='clean-2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='clean.css', v='trusted-phones-21') }}">
+<script defer src="{{ url_for('static', filename='forms.js', v='2') }}"></script><script defer src="{{ url_for('static',filename='import-progress.js',v='3') }}"></script><script defer src="{{ url_for('static',filename='page-loading.js',v='2') }}"></script>{% block head %}{% endblock %}</head>
+<body>
+{% if user %}
+<aside class="sidebar">
+  <a class="brand" href="{{ url_for('home') }}"><img class="brand-logo" src="{{ url_for('static', filename='wa-logo-clean.png') }}" alt="WA"><span>Base de clientes<small>Gestão e atendimento</small></span></a>
+  <div class="nav-label">NAVEGAÇÃO</div>
+  <nav>
+    <a class="{{ 'active' if request.endpoint == 'home' else '' }}" href="{{ url_for('home') }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('home') }}</span> Início</a>
+    <a class="{{ 'active' if request.endpoint in ['index','detail','edit_client','contact','history'] and not request.args.get('lixeira') else '' }}" href="{{ url_for('index') }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('clients') }}</span> Cadastros</a>
+    <a class="{{ 'active' if request.endpoint == 'new_client' else '' }}" href="{{ url_for('new_client') }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('user-plus') }}</span> Novo cadastro</a>
+    {% if editor %}<a class="{{ 'active' if request.args.get('lixeira') == '1' or request.endpoint == 'features.trash_imports' or (request.endpoint == 'features.imports' and request.args.get('excluidas') == '1') else '' }}" href="{{ url_for('index', lixeira=1) }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('trash') }}</span> Lixeira</a>{% endif %}
+    {% if features_v2 and editor %}<a class="{{ 'active' if request.endpoint in ['features.imports','features.upload','features.import_mapping','features.import_review','features.batch_clients','features.existing_clients'] else '' }}" href="{{ url_for('features.imports') }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('upload') }}</span> Importações</a><a class="{{ 'active' if request.endpoint == 'features.categories' else '' }}" href="{{ url_for('features.categories') }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('tags') }}</span> Categorias</a>{% endif %}
+    <a class="{{ 'active' if request.endpoint in ['settings','password','users','system_logs'] else '' }}" href="{{ url_for('settings') }}"><span class="nav-symbol" aria-hidden="true">{{ nav_icon('settings') }}</span> Configurações</a>
+  </nav>
+  <div class="sidebar-bottom"><div class="avatar">{{ user.nome[:1]|upper }}</div><strong>{{ user.nome }}</strong><small>{{ roles[user.perfil] }}</small>
+    <form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="logout">Sair da conta</button></form>
+  </div>
+</aside>
+{% endif %}
+<main class="{{ 'workspace' if user else 'auth-workspace' }}">
+{% if user %}<div class="topbar"><div class="topbar-title">Gestão de clientes <span>/</span> {{ 'Início' if request.endpoint == 'home' else 'Configurações' if request.endpoint in ['settings','password','users'] else 'Cadastros' }}</div></div>{% endif %}
+{% if demo %}<div class="demo-banner">DEMONSTRAÇÃO · Dados fictícios. Nenhuma conexão com seu banco de clientes.</div>{% endif %}
+{% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div role="status" class="notice {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+{% block content %}{% endblock %}
+<footer>WA · Gestão de clientes <span>Uso interno</span></footer>
+</main>
+<div id="page-processing" class="page-processing" hidden role="status" aria-live="polite" aria-atomic="true"><div class="page-processing-card"><span class="page-processing-spinner" aria-hidden="true"></span><div><strong data-processing-title>Processando…</strong><p data-processing-message>Aguarde a conclusão. Não é necessário clicar novamente.</p></div></div></div>
+</body></html>

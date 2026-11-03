@@ -1,0 +1,10 @@
+{% macro nav_icon(name) -%}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+{% if name == 'home' %}<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>{% elif name == 'clients' %}<rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="10" cy="9" r="2"/><path d="M7 16v-1a3 3 0 0 1 6 0v1m3-8h1m-1 4h1m-1 4h1"/>
+{% elif name == 'user-plus' %}<circle cx="9" cy="8" r="4"/><path d="M2 21v-2a7 7 0 0 1 14 0v2m3-14v6m-3-3h6"/>
+{% elif name == 'trash' %}<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>
+{% elif name == 'upload' %}<path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/>
+{% elif name == 'tags' %}<path d="M3 4h7l11 11-7 7L3 11Z"/><circle cx="7" cy="8" r="1"/>
+{% elif name == 'settings' %}<path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>
+{% endif %}</svg>
+{%- endmacro %}
