@@ -4,15 +4,20 @@ import secrets
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
+from pathlib import Path
+import hashlib
 
 import pymysql
-from flask import Flask, Response, abort, flash, g, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database import Database
 from pagination import page_numbers
 from export_csv import stream_clients
 from home_summary import HomeSummary
+from read_cache import ReadCache
+from client_origins import load_origins
+from phone_verification import verification_history
 
 ROLES = {'ADM': 'Administração', 'TI': 'Equipe de TI', 'ATENDIMENTO': 'Atendimento'}
 CONTACTS = {
@@ -78,17 +83,34 @@ def client_fields(form):
 
 def create_app(config):
     app = Flask(__name__)
+    read_cache = ReadCache()
+    app.read_cache = read_cache
+    config = {**config, 'on_commit': read_cache.invalidate}
     app.config.update(SECRET_KEY=config['secret_key'], SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE='Strict', PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),
                       MAX_CONTENT_LENGTH=52 * 1024 * 1024, DEMO=config.get('demo', False),
                       FEATURES_V2=config.get('features_v2',config.get('demo',False)),
                       FEATURES_V3=config.get('features_v3',config.get('demo',False)))
 
+    # URLs mudam junto com o conteúdo, permitindo reutilizar os arquivos visuais.
+    asset_versions = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+                      for path in Path(app.static_folder).iterdir() if path.is_file()}
+
+    @app.url_defaults
+    def static_version(endpoint, values):
+        if endpoint == 'static' and values.get('filename') in asset_versions:
+            values['v'] = asset_versions[values['filename']]
+
     def db():
         if 'db' not in g:
             heavy=request.method=='POST' and request.endpoint in ('features.import_delete','features.import_restore','features.import_purge')
             g.db = Database({**config,'read_timeout':90} if heavy else config)
         return g.db
+
+    def cached_read(key, loader):
+        if app.config.get('QUERY_CACHE_ENABLED', not app.testing):
+            return read_cache.get(key, loader, g.read_generation)
+        return loader()
 
     def audit(action, entity, entity_id, before=None, after=None, reason=None, client_id=None):
         db().execute('INSERT INTO app_auditoria '
@@ -130,9 +152,10 @@ def create_app(config):
     @app.before_request
     def before():
         g.user = None
+        g.read_generation = read_cache.generation
         if request.endpoint == 'static':
             return
-        if request.endpoint != 'features.upload' and request.content_length and request.content_length>64*1024:
+        if request.endpoint not in ('features.upload','lookups.upload') and request.content_length and request.content_length>64*1024:
             abort(413)
         if request.method == 'POST':
             token = request.form.get('csrf', '')
@@ -159,7 +182,11 @@ def create_app(config):
 
     @app.after_request
     def headers(response):
-        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Cache-Control'] = (
+            'public, max-age=31536000, immutable'
+            if request.endpoint == 'static' and response.status_code in (200, 304)
+            and request.args.get('v') == asset_versions.get(request.view_args.get('filename'))
+            else 'no-store')
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'same-origin'
@@ -171,7 +198,7 @@ def create_app(config):
         editor = bool(g.get('user') and g.user['perfil'] in ('ADM', 'TI'))
         manage = bool(g.get('user') and (g.user['perfil'] == 'ADM' or
                       (g.user['perfil'] == 'TI' and g.user['gerenciar_usuarios'])))
-        categories = db().all('SELECT id,nome FROM app_categorias WHERE ativo=1 ORDER BY nome') if app.config['FEATURES_V2'] and g.get('user') and not g.get('database_failed') else []
+        categories = cached_read(('categories',), lambda: db().all('SELECT id,nome FROM app_categorias WHERE ativo=1 ORDER BY nome')) if app.config['FEATURES_V2'] and g.get('user') and not g.get('database_failed') else []
         return {'user': g.get('user'), 'csrf': session.get('csrf'), 'editor': editor,
                 'manage_users': manage, 'roles': ROLES, 'demo': config.get('demo', False),
                 'contact_types': CONTACTS, 'phone_status': PHONE_STATUS,
@@ -248,15 +275,23 @@ def create_app(config):
     @app.get('/inicio')
     @required()
     def home():
-        stats=home_summary.get()
+        stats=home_summary.get(wait=bool(config.get('sqlite_path')))
         jobs=[];activities=[]
         if g.user['perfil'] in ('ADM','TI'):
             if app.config['FEATURES_V2'] and app.config['FEATURES_V3']:
-                jobs=db().all("SELECT i.id,i.arquivo,i.estado,i.criado_em,(SELECT COUNT(*) FROM app_importacao_itens x WHERE x.importacao_id=i.id AND x.estado='pendente') AS pendencias FROM app_importacoes i WHERE i.excluido_em IS NULL ORDER BY i.id DESC LIMIT 5")
-            activities=db().all('SELECT a.id,a.acao,a.entidade,a.criado_em,u.nome AS autor FROM app_auditoria a '
-                                'LEFT JOIN app_usuarios u ON u.id=a.usuario_id ORDER BY a.id DESC LIMIT 5')
+                jobs=cached_read(('home-jobs',),lambda: db().all("SELECT i.id,i.arquivo,i.estado,i.criado_em,(SELECT COUNT(*) FROM app_importacao_itens x WHERE x.importacao_id=i.id AND x.estado='pendente') AS pendencias FROM app_importacoes i WHERE i.excluido_em IS NULL ORDER BY i.id DESC LIMIT 5"))
+            activities=cached_read(('home-activities',),lambda: db().all(
+                'SELECT a.id,a.acao,a.entidade,a.criado_em,u.nome AS autor FROM '
+                '(SELECT id,acao,entidade,criado_em,usuario_id FROM app_auditoria ORDER BY id DESC LIMIT 5) a '
+                'LEFT JOIN app_usuarios u ON u.id=a.usuario_id ORDER BY a.id DESC'))
         return render_template('home.html',stats=stats,jobs=jobs,activities=activities,
                                today=datetime.now(timezone(timedelta(hours=-3))).strftime('%d/%m/%Y'))
+
+    @app.get('/inicio/resumo')
+    @required()
+    def home_summary_status():
+        stats = home_summary.get(wait=False)
+        return jsonify(stats=stats), 200 if stats is not None else 202
 
     @app.get('/')
     @required()
@@ -264,17 +299,19 @@ def create_app(config):
         query = request.args.get('q', '').strip()[:255]
         deleted = request.args.get('lixeira') == '1' and g.user['perfil'] in ('ADM', 'TI')
         filters = {key: request.args.get(key, 'todos') for key in ('nome', 'telefone', 'email')}
-        filters = {key: value if value in ('todos', 'com', 'sem') else 'todos' for key, value in filters.items()}
+        filters = {key: value if value in (('todos', 'com', 'sem', 'verificado', 'nao_verificado') if key == 'telefone' else ('todos', 'com', 'sem')) else 'todos' for key, value in filters.items()}
         uf = request.args.get('uf', '').strip().upper()
         if not re.fullmatch('[A-Z]{2}', uf):
             uf = ''
         orders = {'nome': "(NULLIF(TRIM(c.nome),'') IS NULL), c.nome, c.id DESC",
                   'recentes': 'c.id DESC', 'antigos': 'c.id ASC'}
-        order = request.args.get('ordem', 'nome')
+        order = request.args.get('ordem', request.cookies.get('wa_sort', 'nome'))
         if order not in orders:
             order = 'nome'
         page = max(1,request.args.get('pagina',1,type=int))
-        page_size=request.args.get('por_pagina',25,type=int)
+        saved_size = request.cookies.get('wa_page_size', '25')
+        default_size = int(saved_size) if saved_size in ('25','50','100','200') else 25
+        page_size=request.args.get('por_pagina',default_size,type=int)
         if page_size not in (25,50,100,200):page_size=25
         base = 'c.excluido_em IS ' + ('NOT NULL' if deleted else 'NULL')
         params = []
@@ -290,7 +327,15 @@ def create_app(config):
         for key, table in (('telefone', 'telefones'), ('email', 'emails')):
             if filters[key] != 'todos':
                 base += ' AND c.id '+('NOT IN' if filters[key]=='sem' else 'IN')
-                base += f' (SELECT contato.cliente_id FROM {table} contato WHERE contato.excluido_em IS NULL AND contato.cliente_id IS NOT NULL)'
+                base += f' (SELECT contato.cliente_id FROM {table} contato WHERE contato.excluido_em IS NULL AND contato.cliente_id IS NOT NULL'
+                if key == 'telefone' and filters[key] in ('verificado','nao_verificado'):
+                    base += ' AND contato.situacao=%s'
+                    params.append('confirmado' if filters[key]=='verificado' else 'nao_verificado')
+                base += ')'
+        if filters['telefone']=='nao_verificado':
+            # Exclui o cliente inteiro se houver qualquer telefone verificado ativo.
+            base += ' AND NOT EXISTS (SELECT 1 FROM telefones verificado WHERE verificado.cliente_id=c.id AND verificado.excluido_em IS NULL AND verificado.situacao=%s)'
+            params.append('confirmado')
         if uf:
             base += ' AND EXISTS (SELECT 1 FROM enderecos e WHERE e.cliente_id=c.id AND e.excluido_em IS NULL AND e.uf=%s)'
             params.append(uf)
@@ -310,21 +355,32 @@ def create_app(config):
                 base += " AND c.nome LIKE %s ESCAPE '!'"
                 params.append(escaped + '%')
         if request.endpoint=='export_clients':
-            audit('exportar_csv','clientes',0,after={'filtros':dict(request.args),'ordem':'id'})
+            verified_phones_only=filters['telefone']=='verificado'
+            unverified_phones_only=filters['telefone']=='nao_verificado'
+            audit('exportar_csv','clientes',0,after={'filtros':dict(request.args),'ordem':'id',
+                                                  'telefones':'somente_verificados' if verified_phones_only else 'somente_nao_verificados' if unverified_phones_only else 'todos_ativos'})
             db().commit()
-            response=Response(stream_clients(config,base,params,app.config['FEATURES_V2']),content_type='text/csv; charset=utf-8')
-            response.headers['Content-Disposition']='attachment; filename="clientes_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'.csv"'
+            response=Response(stream_clients(config,base,params,app.config['FEATURES_V2'],
+                                            verified_phones_only=verified_phones_only,
+                                            phone_status='nao_verificado' if unverified_phones_only else None),content_type='text/csv; charset=utf-8')
+            filename='clientes_telefones_verificados_' if verified_phones_only else 'clientes_telefones_nao_verificados_' if unverified_phones_only else 'clientes_'
+            response.headers['Content-Disposition']='attachment; filename="'+filename+datetime.now().strftime('%Y%m%d_%H%M%S')+'.csv"'
             response.headers['Cache-Control']='no-store'
             response.headers['X-Content-Type-Options']='nosniff'
             return response
-        total = db().one(f'SELECT COUNT(*) AS n FROM clientes c WHERE {base}', params)['n']
+        filter_key = (base, tuple(params))
+        total = cached_read(('client_count', filter_key),
+                            lambda: db().one(f'SELECT COUNT(*) AS n FROM clientes c WHERE {base}', params)['n'])
         pages = max(1,(total+page_size-1)//page_size)
         page = min(page, pages)
-        rows = db().all(f'SELECT c.id,c.cpf,c.nome,c.data_nascimento,c.excluido_em, '
+        # Materializa apenas a página antes de consultar os contatos de cada cliente.
+        rows = cached_read(('client_page', filter_key, order, page_size, page), lambda: db().all(f'SELECT c.id,c.cpf,c.nome,c.data_nascimento,c.excluido_em, '
                          '(SELECT COUNT(*) FROM telefones t WHERE t.cliente_id=c.id '
                          'AND t.excluido_em IS NULL) AS telefones '
-                         f'FROM clientes c WHERE {base} ORDER BY {orders[order]} LIMIT %s OFFSET %s',
-                         params + [page_size,(page-1)*page_size])
+                         f'FROM (SELECT c.id,c.cpf,c.nome,c.data_nascimento,c.excluido_em '
+                         f'FROM clientes c WHERE {base} ORDER BY {orders[order]} LIMIT %s OFFSET %s) c '
+                         f'ORDER BY {orders[order]}',
+                         params + [page_size,(page-1)*page_size]))
         paging = dict(q=query, lixeira=1 if deleted else 0, uf=uf, ordem=order, categoria=category,por_pagina=page_size, **filters)
         active_filters = sum(value != 'todos' for value in filters.values()) + bool(uf) + (category!='todos')
         return render_template('index.html', rows=rows, total=total, query=query,
@@ -462,24 +518,15 @@ def create_app(config):
         contacts = {}
         for kind, (table, fields) in CONTACTS.items():
             contacts[kind] = db().all(f'SELECT * FROM {table} WHERE cliente_id=%s ORDER BY id', (client_id,))
+        phone_verifications=verification_history(db(),client_id,contacts['telefone']) if g.user['perfil'] in ('ADM','TI') else {}
         history = db().all('SELECT a.id,a.acao,a.entidade,a.entidade_id,a.criado_em,a.motivo,u.nome AS autor '
                            'FROM app_auditoria a LEFT JOIN app_usuarios u ON u.id=a.usuario_id '
                            'WHERE a.cliente_id=%s ORDER BY a.id DESC LIMIT 30', (client_id,)) if g.user['perfil'] in ('ADM', 'TI') else []
         categories=db().all('SELECT cat.id,cat.nome FROM app_categorias cat JOIN app_cliente_categorias l ON l.categoria_id=cat.id WHERE l.cliente_id=%s AND cat.ativo=1 ORDER BY cat.nome',(client_id,)) if app.config['FEATURES_V2'] else []
-        origins=[]
+        origins=[];more_origins=False
         if app.config['FEATURES_V2'] and g.user['perfil'] in ('ADM','TI'):
-            receipts=db().all("SELECT i.id AS lote,i.arquivo,i.mapeamento,cat.nome AS categoria,x.originais,x.linhas "
-                              "FROM app_importacao_itens x JOIN app_importacoes i ON i.id=x.importacao_id "
-                              "LEFT JOIN app_categorias cat ON cat.id=i.categoria_id WHERE x.cliente_id_resultado=%s AND x.estado='aplicado' ORDER BY x.id DESC LIMIT 10",(client_id,))
-            for receipt in receipts:
-                mapping=json.loads(receipt['mapeamento']);source=json.loads(receipt['originais']);lines=json.loads(receipt['linhas'])
-                extra=[]
-                for index,(header,target) in enumerate(zip(mapping['headers'],mapping['targets'])):
-                    if target=='extra':
-                        values=list(dict.fromkeys(row[index] for row in source if index<len(row) and row[index]))
-                        if values:extra.append((header,values))
-                origins.append({'lote':receipt['lote'],'arquivo':receipt['arquivo'],'categoria':receipt['categoria'] or 'Sem categoria','extra':extra,'linhas':lines})
-        return render_template('detail.html', client=client, contacts=contacts, history=history,client_categories=categories,origins=origins)
+            origins,more_origins=load_origins(db(),client_id)
+        return render_template('detail.html', client=client, contacts=contacts, history=history,client_categories=categories,origins=origins,more_origins=more_origins,phone_verifications=phone_verifications)
 
     @app.route('/clientes/<int:client_id>/editar', methods=['GET', 'POST'])
     @required(edit=True)
@@ -745,4 +792,8 @@ def create_app(config):
     app.config['DUMMY_HASH'] = generate_password_hash(secrets.token_urlsafe(32))
     from features import register_features
     register_features(app,config,db,required,audit,locked_client,bump)
+    from operations import register_operations
+    register_operations(app,config,db,required)
+    from lookup_routes import register_lookups
+    register_lookups(app,config,db,required,audit)
     return app

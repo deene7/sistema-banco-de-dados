@@ -1,11 +1,21 @@
 """Leitura e validação de arquivos. Nenhuma instrução contida no arquivo é executada."""
 import codecs
 import csv
+import hashlib
 import re
 import unicodedata
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+
+def file_digest(path):
+    """Confere a integridade sem carregar o arquivo inteiro na memória."""
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
 
 FIELDS = {
  'cpf':'CPF', 'nome':'Nome completo', 'nome_mae':'Nome da mãe', 'data_nascimento':'Nascimento',

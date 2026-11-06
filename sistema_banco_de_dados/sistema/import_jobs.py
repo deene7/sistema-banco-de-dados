@@ -1,12 +1,11 @@
 """Importações persistentes, com conferência antes da aprovação e retomada por item."""
-import hashlib
 import json
 import threading
 import time
-from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from database import Database
-from import_data import ADDRESS_FIELDS, FIELDS, normalize, rows, same, key
+from import_data import ADDRESS_FIELDS, FIELDS, normalize, rows, same, key, file_digest
 from bulk import update_client_fields, bump_clients, chunks
 
 
@@ -34,7 +33,7 @@ def trusted_phone_sources(connection,job):
     ids=category_ids(job)
     if not ids:return []
     return [row for row in connection.all('SELECT id,nome FROM app_categorias WHERE id IN ('+','.join(['%s']*len(ids))+') ORDER BY id',ids)
-            if key(row['nome']) in ('discadora','argus')]
+            if key(row['nome']) in ('discadora','argus','fonteverificada','novavida')]
 
 
 class ImportManager:
@@ -43,32 +42,28 @@ class ImportManager:
         self.running={}
         self.lock=threading.Lock()
         self.work_lock=threading.Lock()
-        self.fast_slots=threading.BoundedSemaphore(2)
+        self.worker=ThreadPoolExecutor(max_workers=1,thread_name_prefix='importacao')
+
+    def snapshot(self):
+        with self.lock:
+            queued=0;result={}
+            for job_id,meta in self.running.items():
+                row=dict(meta)
+                if row['situacao']=='fila':
+                    queued+=1;row['posicao']=queued
+                row['decorridos']=round(time.monotonic()-row['inicio']) if row.get('inicio') else 0
+                result[job_id]=row
+            return result
+
+    def progress(self,job_id,completed,total=None):
+        with self.lock:
+            meta=self.running.get(job_id)
+            if meta is not None:
+                meta['progresso']=completed
+                if total is not None:meta['total']=total
 
     def dispatch(self,job_id,phase):
-        connection=Database(self.config)
-        try:job=connection.one('SELECT caminho,aba FROM app_importacoes WHERE id=%s',(job_id,))
-        finally:connection.close()
-        small=False
-        try:
-            if job and Path(job['caminho']).stat().st_size<=65536:
-                iterator=rows(job['caminho'],job['aba'])
-                try:
-                    small=True
-                    for count,_ in enumerate(iterator):
-                        if count>200:small=False;break
-                finally:iterator.close()
-        except (OSError,ValueError):
-            # O processamento normal registra a falha no recibo do lote.
-            small=False
-        if small and self.fast_slots.acquire(blocking=False):
-            try:
-                with self.lock:
-                    if job_id in self.running:return False
-                    self.running[job_id]=threading.current_thread()
-                self.run(job_id,phase,serialized=False)
-                return True
-            finally:self.fast_slots.release()
+        # Inclusive arquivos pequenos: devolve a tela antes de analisar/gravar.
         return self.start(job_id,phase)
 
     def active(self, job_id):
@@ -77,15 +72,18 @@ class ImportManager:
     def start(self, job_id, phase):
         with self.lock:
             if job_id in self.running:return False
-            thread=threading.Thread(target=self.run,args=(job_id,phase),daemon=True,
-                                    name=f'importacao-{job_id}')
-            self.running[job_id]=thread
-            thread.start()
+            self.running[job_id]={'situacao':'fila','fase':phase,'progresso':0,'total':None}
+            try:self.worker.submit(self.run,job_id,phase)
+            except Exception:
+                self.running.pop(job_id,None)
+                raise
         return True
 
-    def run(self, job_id, phase, serialized=True):
+    def run(self, job_id, phase):
         try:
-            with self.work_lock if serialized else nullcontext():
+            with self.work_lock:
+                with self.lock:
+                    self.running[job_id].update(situacao='executando',inicio=time.monotonic())
                 if phase=='preparar':self.prepare(job_id)
                 else:self.apply(job_id)
         except Exception as error:
@@ -114,7 +112,7 @@ class ImportManager:
             categories=check_categories(connection,job)
             sources=trusted_phone_sources(connection,job)
             path=Path(job['caminho'])
-            if hashlib.sha256(path.read_bytes()).hexdigest()!=job['sha256']:
+            if file_digest(path)!=job['sha256']:
                 raise ValueError('O arquivo de origem foi modificado após o envio. Envie um novo lote.')
             if connection.one("SELECT COUNT(*) AS n FROM app_importacao_itens WHERE importacao_id=%s AND estado='aplicado'",(job_id,))['n']:
                 raise ValueError('Este lote já confirmou registros. Use Retomar importação, sem refazer a preparação.')
@@ -169,6 +167,7 @@ class ImportManager:
                     if stats['linhas']%1000==0:
                         connection.execute('UPDATE app_importacoes SET progresso=%s WHERE id=%s',(stats['linhas'],job_id))
                         connection.commit()
+                        self.progress(job_id,stats['linhas'])
             finally:iterator.close()
             # Consulta o banco em lotes; não executa uma busca completa por linha do arquivo.
             existing={}
@@ -258,6 +257,8 @@ class ImportManager:
             self.authorized(connection,job['aprovador_id'])
             completed=connection.one("SELECT COUNT(*) AS n FROM app_importacao_itens WHERE importacao_id=%s AND estado='aplicado'",(job_id,))['n']
             connection.commit()
+            summary=json.loads(job['resumo'] or '{}')
+            self.progress(job_id,completed,summary.get('prontos'))
             while True:
                 self.authorized(connection,job['aprovador_id'])
                 batch=connection.all("SELECT id,dados,cliente_versao FROM app_importacao_itens WHERE importacao_id=%s AND estado='pronto' ORDER BY id LIMIT 500 FOR UPDATE",(job_id,))
@@ -265,6 +266,7 @@ class ImportManager:
                 completed+=self.apply_batch(connection,job,batch)
                 connection.execute('UPDATE app_importacoes SET progresso=%s,resumo=%s WHERE id=%s',(completed,job['resumo'],job_id))
                 connection.commit()
+                self.progress(job_id,completed)
             summary=json.loads(job['resumo']) if job['resumo'] else {}
             summary['aplicacao_segundos']=round(time.perf_counter()-started,4)
             connection.execute("UPDATE app_importacoes SET estado='concluida',erro=NULL,resumo=%s WHERE id=%s",(dump(summary),job_id))
@@ -387,7 +389,16 @@ class ImportManager:
                 audits.append((job['aprovador_id'],client_id,'importar','cliente',client_id,dump({'lote':job['id'],'campos_preenchidos':plan['filled'],'telefones_verificados':verified_for_client,**result})))
         if updates:update_client_fields(connection,updates,changed_fields)
         if version_only:bump_clients(connection,version_only)
-        if phone_inserts:connection.many('INSERT INTO telefones (cliente_id,numero,situacao) VALUES (%s,%s,%s)',phone_inserts)
+        if phone_inserts:
+            connection.many('INSERT INTO telefones (cliente_id,numero,situacao) VALUES (%s,%s,%s)',phone_inserts)
+            if verify_phones:
+                inserted={(client_id,number) for client_id,number,status in phone_inserts}
+                for subset in chunks(sorted({client_id for client_id,number in inserted})):
+                    marks=','.join(['%s']*len(subset))
+                    for phone in connection.all(f'SELECT id,cliente_id,numero FROM telefones WHERE cliente_id IN ({marks}) AND situacao=%s AND excluido_em IS NULL',subset+['confirmado']):
+                        if (phone['cliente_id'],phone['numero']) in inserted:
+                            phone_audits.append((job['aprovador_id'],phone['cliente_id'],'verificar_origem','telefone',phone['id'],None,
+                                dump({'situacao':'confirmado','numero':phone['numero'],'lote':job['id'],'fontes':summary.get('fontes_verificacao',[]),'novo_telefone':True})))
         for batch in chunks(verified_ids):
             connection.execute("UPDATE telefones SET situacao='confirmado' WHERE id IN ("+','.join(['%s']*len(batch))+") AND excluido_em IS NULL",batch)
         if phone_audits:connection.many('INSERT INTO app_auditoria (usuario_id,cliente_id,acao,entidade,entidade_id,antes,depois) VALUES (%s,%s,%s,%s,%s,%s,%s)',phone_audits)

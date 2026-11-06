@@ -57,7 +57,9 @@ def migrate(connection,service_user):
             cur.execute('INSERT INTO app_categorias (nome) SELECT %s WHERE NOT EXISTS (SELECT 1 FROM app_categorias WHERE nome=%s)',(name,name))
         for table,name,columns in [
                 ('clientes','idx_app_clientes_ativos','excluido_em,id'),
+                ('clientes','idx_app_clientes_lista',"excluido_em,((NULLIF(TRIM(nome),'') IS NULL)),nome,id DESC"),
                 ('telefones','idx_app_tel_ativos','excluido_em,cliente_id,numero'),
+                ('telefones','idx_app_tel_verificados','situacao,excluido_em,cliente_id'),
                 ('emails','idx_app_email_ativos','excluido_em,cliente_id,email'),
                 ('app_importacao_itens','idx_app_importacao_lote_id','importacao_id,id'),
                 ('enderecos','idx_app_endereco_uf','excluido_em,uf,cliente_id')]:

@@ -84,6 +84,9 @@ def main():
             cur.execute("SELECT COUNT(*) AS n FROM information_schema.statistics WHERE table_schema='wa_clientes' AND table_name='clientes' AND index_name='idx_app_nome'")
             if not cur.fetchone()['n']:
                 cur.execute('CREATE INDEX idx_app_nome ON clientes (nome)')
+            cur.execute("SELECT COUNT(*) AS n FROM information_schema.statistics WHERE table_schema='wa_clientes' AND table_name='clientes' AND index_name='idx_app_clientes_lista'")
+            if not cur.fetchone()['n']:
+                cur.execute("CREATE INDEX idx_app_clientes_lista ON clientes (excluido_em,((NULLIF(TRIM(nome),'') IS NULL)),nome,id DESC)")
             cur.execute("CREATE USER %s@'127.0.0.1' IDENTIFIED BY %s", (service_user, service_password))
             for table in ('clientes', 'telefones', 'emails', 'enderecos', 'app_usuarios'):
                 cur.execute(f"GRANT SELECT,INSERT,UPDATE ON wa_clientes.{table} TO %s@'127.0.0.1'", (service_user,))

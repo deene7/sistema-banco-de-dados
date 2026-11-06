@@ -16,6 +16,7 @@ class HomeSummary:
                 "(SELECT COUNT(DISTINCT t.cliente_id) FROM telefones t JOIN clientes p ON p.id=t.cliente_id WHERE t.excluido_em IS NULL AND p.excluido_em IS NULL) AS com_telefone,"
                 "(SELECT COUNT(DISTINCT e.cliente_id) FROM emails e JOIN clientes p ON p.id=e.cliente_id WHERE e.excluido_em IS NULL AND p.excluido_em IS NULL) AS com_email "
                 'FROM clientes WHERE excluido_em IS NULL')
+            stats={key:int(value) for key,value in stats.items()}
             stats['sem_telefone']=stats['total']-stats['com_telefone']
             stats['sem_email']=stats['total']-stats['com_email']
             self.data=stats;self.updated=time.monotonic()
@@ -32,9 +33,13 @@ class HomeSummary:
             finally:self.lock.release()
         threading.Thread(target=run,name='resumo-home',daemon=True).start()
 
-    def get(self):
+    def get(self, wait=True):
         if self.data is None:
-            with self.lock:
-                if self.data is None:self.load()
+            if wait:
+                with self.lock:
+                    if self.data is None:self.load()
+            else:
+                if not self.attempted or time.monotonic()-self.attempted>self.ttl:self.background()
+                return dict(self.data) if self.data is not None else None
         elif time.monotonic()-max(self.updated,self.attempted)>self.ttl:self.background()
         return dict(self.data)

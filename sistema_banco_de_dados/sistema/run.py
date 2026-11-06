@@ -51,9 +51,11 @@ def main():
             print('O sistema já está em execução. Abra o endereço no navegador; não é necessário iniciar novamente.')
             return
     try:
+        app.lookup_manager.start_retention()
         serve(app, host=config.get('bind', '127.0.0.1'), port=config.get('web_port', 8080),
               threads=4, channel_timeout=60, clear_untrusted_proxy_headers=True)
     finally:
+        app.lookup_manager.stop_retention()
         if lock:
             lock.close()
 

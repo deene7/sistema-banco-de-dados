@@ -1,5 +1,4 @@
 import csv
-import hashlib
 import io
 import json
 import os
@@ -11,7 +10,7 @@ from pathlib import Path
 import pymysql
 from flask import Blueprint, Response, abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 from werkzeug.security import check_password_hash
-from import_data import FIELDS, guess, inspect_file
+from import_data import FIELDS, guess, inspect_file, file_digest
 from import_jobs import ImportManager, dump, category_ids, check_categories, trusted_phone_sources
 from pagination import page_numbers
 from bulk import chunks, client_state as bulk_client_state, remove_clients
@@ -244,7 +243,7 @@ def register_features(app, config, db, required, audit, locked_client, bump):
         file.save(path)
         if path.stat().st_size>50*1024*1024:
             path.unlink();raise ValueError('O arquivo excede 50 MB. Divida em arquivos menores.')
-        digest=hashlib.sha256(path.read_bytes()).hexdigest()
+        digest=file_digest(path)
         previous=db().all("SELECT id,categoria_id,mapeamento,resumo FROM app_importacoes WHERE sha256=%s AND (categoria_id=%s OR (categoria_id IS NULL AND %s IS NULL)) AND excluido_em IS NULL AND estado='concluida' ORDER BY id DESC",(digest,category_id,category_id))
         duplicate=next((job for job in previous if category_ids(job)==categories and bool(json.loads(job['resumo'] or '{}').get('verificar_telefones'))==verify_source),None)
         if duplicate:

@@ -1,0 +1,12 @@
+<section class="panel client-origins">
+  <div class="panel-heading"><h2>Origem do cadastro</h2><span class="muted">Lotes de importação</span></div>
+  {% for origin in origins %}
+  <article class="origin-record">
+    <div class="origin-record-heading"><div><strong>Lote #{{ origin.lote }} · {{ origin.arquivo }}</strong><p class="muted">{{ origin.categoria }} · Enviado em {{ origin.criado_em|moment }}</p></div><span class="tag {{ 'status-success' if origin.novo_cliente else '' }}">{{ 'Criado neste lote' if origin.novo_cliente else 'Participou deste lote' }}</span></div>
+    {% if origin.excluido_em %}<p class="muted">Este lote está na lixeira.</p>{% endif %}
+    <a class="button small" href="{{ url_for('features.import_review',job_id=origin.lote) }}">Abrir lote #{{ origin.lote }} →</a>
+    {% if origin.linhas or origin.extra %}<details class="origin-details"><summary>Informações preservadas da importação</summary>{% if origin.linhas %}<p class="muted">Linhas de origem: {{ origin.linhas[:20]|join(', ') }}{{ '…' if origin.linhas|length > 20 else '' }}</p>{% endif %}{% if origin.extra %}<dl class="history-data">{% for label,values in origin.extra %}<div><dt>{{ label }}</dt><dd>{{ values|join(' / ') }}</dd></div>{% endfor %}</dl>{% endif %}</details>{% endif %}
+  </article>
+  {% else %}<div class="empty compact">Nenhum lote de importação identificado para este cadastro.</div>{% endfor %}
+  {% if more_origins %}<p class="muted origin-more">Exibindo até 10 lotes, com prioridade para a criação do cadastro e as importações mais recentes.</p>{% endif %}
+</section>

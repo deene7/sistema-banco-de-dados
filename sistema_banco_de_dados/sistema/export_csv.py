@@ -12,7 +12,10 @@ def safe_cell(value):
     return "'"+value if value.lstrip().startswith(('=','+','-','@')) or value.startswith(('\t','\r','\n')) else value
 
 
-def stream_clients(config,where,params,categories=True):
+def stream_clients(config,where,params,categories=True,verified_phones_only=False,phone_status=None):
+    if phone_status not in (None,'nao_verificado'):
+        raise ValueError('Filtro de situação de telefone inválido.')
+    selected_status='confirmado' if verified_phones_only else phone_status
     connection=None
     buffer=io.StringIO(newline='');writer=csv.writer(buffer,delimiter=';',lineterminator='\r\n')
     def row(values):
@@ -47,7 +50,9 @@ def stream_clients(config,where,params,categories=True):
             ids=[client['id'] for client in clients];marks=','.join(['%s']*len(ids))
             phones,emails,addresses,links={},{},{},{}
             for table,column,target in [('telefones','numero',phones),('emails','email',emails)]:
-                for item in connection.all(f'SELECT cliente_id,{column} FROM {table} WHERE cliente_id IN ({marks}) AND excluido_em IS NULL ORDER BY cliente_id,id',ids):
+                status_filter=' AND situacao=%s' if table=='telefones' and selected_status else ''
+                contact_params=ids+[selected_status] if status_filter else ids
+                for item in connection.all(f'SELECT cliente_id,{column} FROM {table} WHERE cliente_id IN ({marks}) AND excluido_em IS NULL{status_filter} ORDER BY cliente_id,id',contact_params):
                     target.setdefault(item['cliente_id'],[]).append(item[column])
             for item in connection.all(f'SELECT * FROM enderecos WHERE cliente_id IN ({marks}) AND excluido_em IS NULL ORDER BY cliente_id,id',ids):
                 address={key:item.get(key) for key in ('tipo','titulo','logradouro','numero','complemento','bairro','cidade','uf','cep') if item.get(key)}

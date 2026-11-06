@@ -6,6 +6,7 @@ import pymysql
 class Database:
     def __init__(self, config):
         self._closed=False
+        self._on_commit = config.get('on_commit')
         self.sqlite = bool(config.get('sqlite_path'))
         if self.sqlite:
             self.conn = sqlite3.connect(config['sqlite_path'], timeout=10)
@@ -50,6 +51,8 @@ class Database:
 
     def commit(self):
         self.conn.commit()
+        if self._on_commit:
+            self._on_commit()
 
     def rollback(self):
         if self._closed or (not self.sqlite and not self.conn.open):return
